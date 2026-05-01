@@ -13,7 +13,7 @@ A minimalist container implementation written in Go to demonstrate Linux process
 - **Environment:** A `rootfs` directory containing a Linux distribution must be present in the project root.
 
 ## Usage
-\`\`\`bash
+**Bash:**
+```
 go build -o gocker main.go
 sudo ./gocker run /bin/sh
-\`\`\`
