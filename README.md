@@ -46,10 +46,12 @@ go build -o gocker gocker.go
 ### Examples
 
 **1. Run a container shell:**
-Enter the interactive shell (requires the `rootfs` directory in the project's root folder):
+Enter the interactive shell (requires the `rootfs` directory in the project's root folder). You must provide a hostname and a command:
 ```bash
-sudo ./gocker run /bin/sh
+sudo ./gocker run gocker-container /bin/sh
 ```
+
+> **Note on Cleanup:** When the container terminates, GOcker attempts to remove its resource limits. If the system reports that the resource is "busy", it usually means a background process is still shutting down. In such cases, no action is required—GOcker will simply reuse the existing directory the next time it runs.
 
 **2. Test Process Isolation (PID Namespace):**
 While inside the container, execute `ps aux`. You will only see your own shell and the `ps` command, and the shell's PID will be `1`.

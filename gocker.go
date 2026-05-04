@@ -15,6 +15,10 @@ func main() {
     	log.Fatal("Must be run as root")
 	}
 
+	if len(os.Args) < 4 {
+		log.Fatal("Usage: gocker run <hostname> <command> <args>")
+	}
+
 	switch os.Args[1] {
 	case "run":
 		parent()
@@ -42,8 +46,19 @@ func parent() {
 	must(os.WriteFile(cgroupPath+"/memory.max", []byte("100000000"), 0700)) 
 	must(os.WriteFile(cgroupPath+"/pids.max", []byte("10"), 0700))
 	pid := fmt.Sprintf("%d", cmd.Process.Pid)
-    must(os.WriteFile(cgroupPath+"/cgroup.procs", []byte(pid), 0700))
-	defer os.RemoveAll(cgroupPath)
+    if err := os.WriteFile(cgroupPath+"/cgroup.procs", []byte(pid), 0700); err != nil {
+        log.Printf("Warning: failed to limit resources: %v", err)
+    }
+	defer func() {
+		fmt.Printf("Cleaning up cgroups at %s... ", cgroupPath)
+		_ = os.WriteFile(cgroupPath+"/cgroup.kill", []byte("1"), 0700)
+
+		if err := os.RemoveAll(cgroupPath); err != nil {
+			fmt.Printf("Warning: %v (it may be busy)\n", err)
+		} else {
+			fmt.Println("Done.")
+		}
+	}()
 	if err := cmd.Wait(); err != nil {
         fmt.Printf("Parent wait error. Details: %v", err)
         os.Exit(1)
@@ -76,14 +91,14 @@ func child() {
 	must(syscall.Mknod("/dev/tty", 0666|syscall.S_IFCHR, (5<<8)|0)) // (direct user contact)
 	must(syscall.Mknod("/dev/console", 0666|syscall.S_IFCHR, (5<<8)|1)) // (main output and critical logging)
 
-	must(syscall.Sethostname([]byte("gocker-container")))
+	must(syscall.Sethostname([]byte(os.Args[2])))
 
 	must(syscall.Unmount("/oldrootfs", syscall.MNT_DETACH))
 	must(os.Remove("/oldrootfs"))
 
 	must(syscall.Mount("", "/", "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY, ""))
 
-	cmd := exec.Command(os.Args[2], os.Args[3:]...)
+	cmd := exec.Command(os.Args[3], os.Args[4:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
