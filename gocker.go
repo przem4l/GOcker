@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 )
 
@@ -32,6 +33,13 @@ func main() {
 }
 
 func parent() {
+	rootfs, err := filepath.Abs("rootfs")
+	if err != nil {
+		log.Fatalf("Failed to resolve rootfs path: %v", err)
+	}
+	if _, err := os.Stat(rootfs); err != nil {
+		log.Fatalf("rootfs not found at %s: %v", rootfs, err)
+	}
 	r, w, err := os.Pipe()
 	if err != nil {
 		log.Fatalf("Failed to create pipe: %v", err)
@@ -39,18 +47,25 @@ func parent() {
 
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET | syscall.CLONE_NEWUSER,
+		UidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
+		},
+		GidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Getgid(), Size: 1},
+		},
 	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.ExtraFiles = []*os.File{r}
-	cmd.Env = append(os.Environ(), "GOCKER_CHILD=1")
+	cmd.Env = append(os.Environ(), "GOCKER_CHILD=1", "GOCKER_ROOTFS="+rootfs)
 
 	if err := cmd.Start(); err != nil {
         fmt.Printf("Parent start error. Details: %v", err)
         os.Exit(1)
     }
+	r.Close()
 	// cgroups for childs (limited to 10 processes + 100MB of RAM)
 	cgroupPath := fmt.Sprintf("/sys/fs/cgroup/gocker-%d", cmd.Process.Pid) 
 	if err := os.MkdirAll(cgroupPath, 0700); err != nil {
@@ -86,8 +101,7 @@ func parent() {
 		}
 	}()
 	if err := cmd.Wait(); err != nil {
-        fmt.Printf("Parent wait error. Details: %v", err)
-        os.Exit(1)
+        fmt.Fprintf(os.Stderr, "Parent wait error. Details: %v", err)
     }
 }
 
@@ -118,13 +132,17 @@ func child() {
 	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
 		log.Fatalf("Failed to make / private: %v", err)
 	}
-	if err := syscall.Mount("rootfs", "rootfs", "", syscall.MS_BIND, ""); err != nil {
+	rootfs := os.Getenv("GOCKER_ROOTFS")
+	if rootfs == "" {
+		log.Fatal("GOCKER_ROOTFS not set")
+	}
+	if err := syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND, ""); err != nil {
 		log.Fatalf("Failed to bind mount rootfs: %v", err)
 	}
-	if err := os.MkdirAll("rootfs/oldrootfs", 0700); err != nil {
+	if err := os.MkdirAll(rootfs+"/oldrootfs", 0700); err != nil {
 		log.Fatalf("Failed to create oldrootfs directory: %v", err)
 	}
-	if err := syscall.PivotRoot("rootfs", "rootfs/oldrootfs"); err != nil {
+	if err := syscall.PivotRoot(rootfs, rootfs+"/oldrootfs"); err != nil {
 		log.Fatalf("Failed to pivot_root: %v", err)
 	}
 	if err := os.Chdir("/"); err != nil {
@@ -133,14 +151,14 @@ func child() {
 	if err := syscall.Mount("tmpfs", "/tmp", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, ""); err != nil {
 		log.Fatalf("Failed to mount /tmp: %v", err)
 	}
-	if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
+	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, ""); err != nil {
 		log.Fatalf("Failed to mount /proc: %v", err)
 	}
 	defer func() {
 		fmt.Println("Cleaning... Unmounting /proc...")
 		syscall.Unmount("/proc", 0)
 	}()
-	if err := syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID, "mode=755"); err != nil {
+	if err := syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "mode=755"); err != nil {
 		log.Fatalf("Failed to mount /dev: %v", err)
 	}
 	defer func() {
