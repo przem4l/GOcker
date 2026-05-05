@@ -10,8 +10,9 @@ Containers are not true "virtual machines"; they are simply isolated Linux proce
 - **Hostname Isolation (UTS Namespace):** The container receives an independent hostname, identifying itself uniquely (e.g., `gocker-container`).
 - **Filesystem Isolation (`pivot_root` & Mount Namespace):** Safely swaps the root directory for the running process, jailing it securely in a specific folder.
 - **Network Isolation (NET Namespace):** The container is entirely disconnected from the host's network stack, receiving only an isolated loopback interface.
-- **Resource Limiting (Cgroups v2):** Restricts resource usage to prevent host starvation. The application is capped at a maximum of 10 simultaneous processes and ~100MB of RAM.
-- **Filesystem Security:** The base `rootfs` is explicitly mounted as **read-only** to prevent malicious modifications. It securely provisions fully writable in-memory `tmpfs` directories for `/tmp` and mounts standard OCI `/dev` nodes.
+- **Resource Limiting & Scheduling (Cgroups v2):** Restricts resource usage to prevent host starvation. The application is capped at a maximum of 10 simultaneous processes and ~100MB of RAM (with swap memory fully disabled). Uses unique instance identifiers and pipe synchronization to ensure limits are rigidly applied before the container runs, avoiding race conditions and allowing concurrent container execution.
+- **Filesystem Security:** The base `rootfs` is explicitly mounted as **read-only** to prevent malicious modifications. It securely provisions fully writable in-memory `tmpfs` directories with `MS_NOSUID` flags for `/tmp` and `/dev`, and dynamically constructs standard OCI device nodes.
+- **Internal Security:** The internal `child` bootstrapper requires internal environment tokens, safely rejecting direct user invocations (e.g. users typing `./gocker child`).
 
 ## Requirements
 - **Operating System:** Linux (native or WSL2)
@@ -60,9 +61,12 @@ ps aux
 ```
 
 **3. Test Network Isolation (NET Namespace):**
-Try listing the network interfaces from within the container. The system hides the host's interfaces (e.g., `eth0` or `wlan0`), showing only the completely isolated loopback interface (`lo`).
+Try listing the network interfaces from within the container. The system hides the host's interfaces (e.g., `eth0` or `wlan0`), showing only the completely isolated, yet automatically activated, loopback interface (`lo`).
 ```bash
 ip a
+
+# You can now test it with ping:
+ping -c 2 127.0.0.1
 ```
 
 **4. Test Filesystem Security (Read-Only Rootfs):**
@@ -80,8 +84,15 @@ touch /tmp/test.txt
 The container is restricted to a maximum of 10 processes. A dangerous "fork-bomb" attack, which could freeze the host machine if executed natively, is completely harmless here and merely hits your configured limit:
 ```bash
 # sh fork-bomb - totally safe for the host
-f(){ f|f& };f
+bomb() { bomb | bomb & }; bomb
 # > sh: can't fork / Resource temporarily unavailable
+```
+
+**6. Test Resource Limiting (Cgroups v2 Memory & Swap limits):**
+The container is restricted to ~100MB of RAM, and Swap memory is strictly disallowed. Use `dd` to forcefully write exceeding limits to the RAM disk (`/tmp` tmpfs). It will instantly invoke the host's OOM (Out Of Memory) Killer, terminating the process and cleanly saving the host.
+```bash
+dd if=/dev/zero of=/tmp/wypelnienie bs=1M count=150
+# > Parent wait error. Details: signal: killed
 ```
 
 ## Limitations
