@@ -47,13 +47,7 @@ func parent() {
 
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET | syscall.CLONE_NEWUSER,
-		UidMappings: []syscall.SysProcIDMap{
-			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
-		},
-		GidMappings: []syscall.SysProcIDMap{
-			{ContainerID: 0, HostID: os.Getgid(), Size: 1},
-		},
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
 	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -62,11 +56,11 @@ func parent() {
 	cmd.Env = append(os.Environ(), "GOCKER_CHILD=1", "GOCKER_ROOTFS="+rootfs)
 
 	if err := cmd.Start(); err != nil {
-        fmt.Printf("Parent start error. Details: %v", err)
+        fmt.Fprintf(os.Stderr, "Parent start error. Details: %v", err)
         os.Exit(1)
     }
 	r.Close()
-	// cgroups for childs (limited to 10 processes + 100MB of RAM)
+	// cgroups for children (limited to 10 processes + 100MB of RAM)
 	cgroupPath := fmt.Sprintf("/sys/fs/cgroup/gocker-%d", cmd.Process.Pid) 
 	if err := os.MkdirAll(cgroupPath, 0700); err != nil {
 		log.Fatalf("Failed to create cgroup: %v", err)
@@ -158,7 +152,7 @@ func child() {
 		fmt.Println("Cleaning... Unmounting /proc...")
 		syscall.Unmount("/proc", 0)
 	}()
-	if err := syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "mode=755"); err != nil {
+	if err := syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID, "mode=755"); err != nil {
 		log.Fatalf("Failed to mount /dev: %v", err)
 	}
 	defer func() {
